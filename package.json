@@ -1,0 +1,25 @@
+{
+  "name": "pt-exchange-bot",
+  "version": "1.0.0",
+  "description": "PTExchange Telegram bot - Node.js rewrite (from Telebot Creator/TPY), deployed on Render + Neon Postgres",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "migrate": "node src/db/migrate.js",
+    "import-legacy": "node scripts/import-legacy-data.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "telegraf": "^4.16.3",
+    "express": "^4.19.2",
+    "pg": "^8.12.0",
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3",
+    "qrcode": "^1.5.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
