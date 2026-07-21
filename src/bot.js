@@ -135,4 +135,18 @@ bot.on('text', async (ctx, next) => {
   return next();
 });
 
+// Without this, an error thrown inside ANY handler (a bad API response, a
+// malformed buffer, anything) becomes an unhandled promise rejection - which
+// crashes the entire Node process and takes down the bot for every user, not
+// just the one who triggered it. Render then restarts the whole service.
+// This catches it, logs it, and tries to tell the affected user something
+// went wrong instead of silently going down.
+bot.catch((err, ctx) => {
+  console.error(`Bot error for update ${ctx.updateType}:`, err);
+  const chatId = ctx.chat?.id;
+  if (chatId) {
+    ctx.telegram.sendMessage(chatId, '⚠️ Something went wrong processing that. Please try again.').catch(() => {});
+  }
+});
+
 module.exports = bot;

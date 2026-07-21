@@ -5,6 +5,16 @@ const store = require('./db/store');
 const { startDepositMonitor } = require('./cron/depositMonitor');
 const { notifyDeposit } = require('./lib/notify');
 
+// Same rationale as bot.catch() in bot.js, but for anything OUTSIDE Telegraf's
+// own error handling - the webhook route, the cron job, etc. Log it and keep
+// running instead of letting the whole Render service go down and restart.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+});
+
 const app = express();
 app.use(express.json());
 
