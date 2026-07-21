@@ -48,10 +48,28 @@ async function editOrSend(ctx, chatId, messageId, text, keyboard = undefined) {
   }
 }
 
+// For progressive/incremental renders (dashboard's staged loading, etc.)
+// where the same message gets edited multiple times in quick succession.
+// Telegram throws "message is not modified" if the new text is identical to
+// what's already there (e.g. two data sources resolve to the same rendered
+// text) - that's not a real failure and should just be ignored, NOT trigger
+// a fallback to sending a brand new duplicate message like editOrSend does.
+async function editOrIgnore(ctx, chatId, messageId, text, keyboard = undefined) {
+  const extra = { parse_mode: 'HTML', disable_web_page_preview: true };
+  if (keyboard) extra.reply_markup = keyboard;
+  try {
+    return await ctx.telegram.editMessageText(chatId, messageId, undefined, text, extra);
+  } catch (err) {
+    if (err.description?.includes('message is not modified')) return null;
+    console.error('editOrIgnore failed:', err.description || err.message);
+    return null;
+  }
+}
+
 async function deleteSafe(ctx, chatId, messageId) {
   try {
     await ctx.telegram.deleteMessage(chatId, messageId);
   } catch {}
 }
 
-module.exports = { showMenu, sendFresh, editOrSend, deleteSafe };
+module.exports = { showMenu, sendFresh, editOrSend, editOrIgnore, deleteSafe };
