@@ -1,6 +1,5 @@
 const { em } = require('../lib/emoji');
 const store = require('../db/store');
-const { generateQrBuffer } = require('../lib/qr');
 const { showMenu } = require('../lib/ui');
 
 async function receiveMenu(ctx) {
@@ -32,23 +31,19 @@ async function showReceive(ctx, chain) {
     `${em('5264895611517300926', '🏦')} <b>Your ${chain.toUpperCase()} Address</b>\n\n<code>${wallet.address}</code>\n\n` +
     `<i>Scan the QR code or copy the address above to receive funds.</i>`;
 
-  // QR generation is the one part of this that can genuinely fail (bad
-  // buffer, library edge case) - isolate it so a failure there still gets
-  // the user their address as text instead of nothing at all.
+  // QuickChart.io QR API - same one that worked reliably in TBC. Send by URL
+  // directly (Telegraf/Telegram fetch it server-side), no local buffer/lib needed.
+  const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(wallet.address)}&size=300&margin=2`;
+
   try {
-    const qrBuffer = await generateQrBuffer(wallet.address);
-    return await ctx.telegram.sendPhoto(
-      chatId,
-      { source: qrBuffer, filename: 'wallet-qr.png' },
-      {
-        caption,
-        parse_mode: 'HTML',
-        reply_markup: { inline_keyboard: [[{ text: 'Back to Dashboard', callback_data: '/dashboard' }]] },
-      }
-    );
+    return await ctx.telegram.sendPhoto(chatId, qrUrl, {
+      caption,
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: 'Back to Dashboard', callback_data: '/dashboard' }]] },
+    });
   } catch (err) {
-    console.error('QR generation/send failed:', err.message);
-    return ctx.telegram.sendMessage(chatId, caption + `\n\n<i>(QR image couldn't be generated - use the address above.)</i>`, {
+    console.error('QR send failed:', err.message);
+    return ctx.telegram.sendMessage(chatId, caption + `\n\n<i>(QR image couldn't be loaded - use the address above.)</i>`, {
       parse_mode: 'HTML',
       reply_markup: { inline_keyboard: [[{ text: 'Back to Dashboard', callback_data: '/dashboard' }]] },
     });
