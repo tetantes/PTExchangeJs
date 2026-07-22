@@ -2,7 +2,7 @@ const express = require('express');
 const config = require('./config');
 const bot = require('./bot');
 const store = require('./db/store');
-const { startDepositMonitor } = require('./cron/depositMonitor');
+const tonapi = require('./lib/tonapi');
 const { notifyDeposit } = require('./lib/notify');
 
 // Same rationale as bot.catch() in bot.js, but for anything OUTSIDE Telegraf's
@@ -22,36 +22,62 @@ const webhookPath = `/telegram/webhook/${config.webhookSecret}`;
 
 app.use(bot.webhookCallback(webhookPath));
 
-// ── Deposit webhook - called by your Vercel gateway the moment a deposit ──
-// lands, instead of the bot polling for it. See DEPLOY.md for the exact
-// contract this expects your Vercel side to send.
-app.post('/webhook/deposit', async (req, res) => {
+// ── TonAPI deposit webhook ──
+// Replaces the old Vercel-based /webhook/deposit (disabled - no longer
+// registered as a route). TonAPI watches the TON blockchain directly and
+// POSTs here the moment a tracked address has a new transaction - your
+// Vercel gateway is never involved in deposit detection anymore.
+//
+// TonAPI's webhook contract has no shared-secret header, so the random token
+// in the URL path IS the auth (same idea as the Telegram webhook path above -
+// only someone who knows this exact URL can hit it).
+app.post(`/webhook/tonapi/${config.tonapiWebhookToken}`, async (req, res) => {
   try {
-    if (!config.depositWebhookSecret || req.headers['x-webhook-secret'] !== config.depositWebhookSecret) {
-      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    const { account_id, tx_hash } = req.body || {};
+    if (!account_id || !tx_hash) {
+      return res.status(400).json({ ok: false, error: 'account_id and tx_hash are required' });
     }
 
-    const { user_id, amount, chain, comment, tx_link, tx_time } = req.body || {};
-    if (!user_id || !amount) {
-      return res.status(400).json({ ok: false, error: 'user_id and amount are required' });
-    }
-
-    const userId = Number(user_id);
-    const [newBalance] = await Promise.all([
-      store.addBalance(userId, Number(amount)),
-      store.incrementTxStats(userId, 0),
-    ]);
-    if (tx_time) await store.updateLastTxTime(userId, Number(tx_time));
-
-    // Respond to Vercel immediately - don't make it wait on the Telegram
-    // send, which is a separate concern from "did we record the deposit".
+    // Respond immediately - TonAPI doesn't need to wait on us looking up the
+    // user, fetching tx details, or sending a Telegram message.
     res.status(200).json({ ok: true });
 
-    await notifyDeposit(bot.telegram, userId, {
-      amount, comment, txLink: tx_link, newBalance, chain: (chain || 'TON').toUpperCase(),
+    // Dedup: TonAPI can retry a webhook delivery. tx_hash is unique per
+    // transaction, so use it as an idempotency key with a short TTL.
+    const isFirstTime = await store.markIfFirstTime(`tonapi_tx_${tx_hash}`, 300);
+    if (!isFirstTime) return; // already processed this tx recently
+
+    const owner = await store.getUserByRawAddress(account_id);
+    if (!owner) return; // not one of our wallets (or not subscribed yet)
+
+    // The webhook payload only tells us THAT something happened, not what -
+    // fetch the actual transaction to get the amount/sender/comment.
+    // NOTE: field paths here are based on TonAPI's documented v2 schema and
+    // haven't been verified against a live response yet - worth checking
+    // once this is running with a real API key, in case field names differ.
+    const tx = await tonapi.getTransaction(tx_hash);
+    const inMsg = tx?.in_msg;
+    if (!inMsg || !inMsg.source || !inMsg.value) return; // not an incoming deposit (e.g. this account's own outgoing tx)
+
+    const amountTon = Number(inMsg.value) / 1e9; // nanotons -> TON
+    if (!(amountTon > 0)) return;
+
+    const comment = inMsg.decoded_body?.text || inMsg.decoded_body?.comment || null;
+
+    const [newBalance] = await Promise.all([
+      store.addBalance(owner.user_id, amountTon),
+      store.incrementTxStats(owner.user_id, 0),
+    ]);
+
+    await notifyDeposit(bot.telegram, owner.user_id, {
+      amount: amountTon,
+      comment,
+      txLink: `https://tonscan.org/tx/${tx_hash}`,
+      newBalance,
+      chain: 'TON',
     });
   } catch (err) {
-    console.error('Deposit webhook error:', err.message);
+    console.error('TonAPI webhook error:', err.message);
     if (!res.headersSent) res.status(500).json({ ok: false, error: 'internal error' });
   }
 });
@@ -64,7 +90,10 @@ async function main() {
   await bot.telegram.setWebhook(`${config.webhookUrl}${webhookPath}`);
   console.log(`✅ Webhook set to ${config.webhookUrl}${webhookPath}`);
 
-  startDepositMonitor(bot);
+  // Deposit polling cron is disabled - TonAPI's webhook is now the only
+  // deposit-detection path, so the bot makes zero recurring calls to your
+  // Vercel gateway. Re-enable via cron/depositMonitor.js if you ever want a
+  // fallback safety net again.
 
   app.listen(config.port, () => {
     console.log(`✅ Server listening on port ${config.port}`);

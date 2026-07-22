@@ -17,6 +17,11 @@ module.exports = {
   gatewayKey: required('GATEWAY_KEY'),
   toncenterKey: process.env.TONCENTER_API_KEY || '',
   depositWebhookSecret: process.env.DEPOSIT_WEBHOOK_SECRET || '',
+  tonapiKey: process.env.TONAPI_KEY || '',
+  // Random path segment so the TonAPI webhook URL can't be guessed/spoofed -
+  // TonAPI's webhook contract has no shared-secret header, so this is the
+  // equivalent protection: only Telegram-style "secret in the URL" is possible.
+  tonapiWebhookToken: process.env.TONAPI_WEBHOOK_TOKEN || '',
 
   encryptionKey: required('ENCRYPTION_KEY'), // 64 hex chars = 32 bytes
 
