@@ -8,6 +8,7 @@
     "start": "node src/index.js",
     "migrate": "node src/db/migrate.js",
     "import-legacy": "node scripts/import-legacy-data.js",
+    "setup-tonapi": "node scripts/setup-tonapi-webhook.js",
     "dev": "node --watch src/index.js"
   },
   "dependencies": {
