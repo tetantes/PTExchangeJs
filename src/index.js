@@ -3,6 +3,7 @@ const config = require('./config');
 const bot = require('./bot');
 const store = require('./db/store');
 const tonapi = require('./lib/tonapi');
+const gateway = require('./lib/gateway');
 const { notifyDeposit } = require('./lib/notify');
 
 // Same rationale as bot.catch() in bot.js, but for anything OUTSIDE Telegraf's
@@ -64,10 +65,20 @@ app.post(`/webhook/tonapi/${config.tonapiWebhookToken}`, async (req, res) => {
 
     const comment = inMsg.decoded_body?.text || inMsg.decoded_body?.comment || null;
 
-    const [newBalance] = await Promise.all([
-      store.addBalance(owner.user_id, amountTon),
-      store.incrementTxStats(owner.user_id, 0),
+    const wallet = await store.getWallet(owner.user_id, 'ton');
+
+    // Update our internal running total for other features (dashboard tx
+    // count, etc.) but for the notification, show the REAL balance from your
+    // gateway instead of our own calculated total - those can drift out of
+    // sync (fees, other deposits missed earlier, manual DB edits, etc.).
+    const [, balData] = await Promise.all([
+      Promise.all([
+        store.addBalance(owner.user_id, amountTon),
+        store.incrementTxStats(owner.user_id, 0),
+      ]),
+      wallet?.address ? gateway.tonBalance(wallet.address) : Promise.resolve(null),
     ]);
+    const newBalance = balData?.ton_balance ?? amountTon;
 
     await notifyDeposit(bot.telegram, owner.user_id, {
       amount: amountTon,
