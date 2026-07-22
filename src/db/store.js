@@ -131,6 +131,7 @@ async function saveWallet(userId, chain, fields) {
   const {
     address,
     addressEq = null,
+    rawAddress = null,
     version = null,
     path = null,
     encryptedMnemonic = null,
@@ -138,20 +139,50 @@ async function saveWallet(userId, chain, fields) {
     importType = null,
   } = fields;
 
+  // Grab the previous address first (if any) - the caller needs this to
+  // unsubscribe it from TonAPI when a wallet is being replaced, since
+  // otherwise we'd keep watching an address the user no longer controls.
+  const { rows: prevRows } = await pool.query(
+    'SELECT raw_address FROM wallets WHERE user_id = $1 AND chain = $2',
+    [userId, chain]
+  );
+  const previousRawAddress = prevRows[0]?.raw_address || null;
+
   await pool.query(
-    `INSERT INTO wallets (user_id, chain, address, address_eq, version, path, encrypted_mnemonic, encrypted_private_key, import_type, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+    `INSERT INTO wallets (user_id, chain, address, address_eq, raw_address, version, path, encrypted_mnemonic, encrypted_private_key, import_type, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
      ON CONFLICT (user_id, chain) DO UPDATE SET
        address = EXCLUDED.address,
        address_eq = EXCLUDED.address_eq,
+       raw_address = EXCLUDED.raw_address,
        version = EXCLUDED.version,
        path = EXCLUDED.path,
        encrypted_mnemonic = EXCLUDED.encrypted_mnemonic,
        encrypted_private_key = EXCLUDED.encrypted_private_key,
        import_type = EXCLUDED.import_type,
        updated_at = now()`,
-    [userId, chain, address, addressEq, version, path, encryptedMnemonic, encryptedPrivateKey, importType]
+    [userId, chain, address, addressEq, rawAddress, version, path, encryptedMnemonic, encryptedPrivateKey, importType]
   );
+
+  return { previousRawAddress };
+}
+
+// Looks up which user a TonAPI webhook's account_id (raw format) belongs to.
+async function getUserByRawAddress(rawAddress) {
+  const { rows } = await pool.query(
+    'SELECT user_id, chain FROM wallets WHERE raw_address = $1',
+    [rawAddress]
+  );
+  return rows[0] || null;
+}
+
+// All TON wallets with an address - used by the one-time bulk-subscribe
+// script and can be re-run anytime to pick up anyone missed.
+async function getAllTonWallets() {
+  const { rows } = await pool.query(
+    `SELECT user_id, address, raw_address FROM wallets WHERE chain = 'ton' AND address IS NOT NULL`
+  );
+  return rows;
 }
 
 // ── Global bot config (fee_percent, fee_address, maintenance) ──
@@ -277,6 +308,17 @@ async function checkRateLimit(userId, action, cooldownSeconds) {
   return { allowed: true };
 }
 
+// Idempotency check for webhook deliveries that might be retried (TonAPI can
+// redeliver the same event). Returns true the FIRST time a given key is seen
+// within the TTL window, false on any repeat - so callers do
+// `if (!(await markIfFirstTime(...))) return;` to skip duplicate processing.
+async function markIfFirstTime(dedupKey, ttlSeconds) {
+  const existing = await getSession(0, dedupKey);
+  if (existing) return false;
+  await setSession(0, dedupKey, true, ttlSeconds);
+  return true;
+}
+
 module.exports = {
   upsertUser,
   getUser,
@@ -290,6 +332,8 @@ module.exports = {
   getUsersPageWithCount,
   getWallet,
   saveWallet,
+  getUserByRawAddress,
+  getAllTonWallets,
   getConfig,
   setConfig,
   setSession,
@@ -306,4 +350,5 @@ module.exports = {
   getPin,
   setBackupConfirmed,
   checkRateLimit,
+  markIfFirstTime,
 };

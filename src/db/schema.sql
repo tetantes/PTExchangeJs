@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS wallets (
   chain TEXT NOT NULL CHECK (chain IN ('ton', 'bsc')),
   address TEXT NOT NULL,
   address_eq TEXT,                     -- TON only
+  raw_address TEXT,                    -- TON only, "workchain:hex" form TonAPI needs for subscriptions/lookups
   version TEXT,                        -- v4 / v5 for TON, 'bsc' for BSC
   path TEXT,
   encrypted_mnemonic TEXT,             -- AES-256-GCM ciphertext (iv:tag:data), replaces the old obfuscate()
@@ -42,6 +43,11 @@ CREATE TABLE IF NOT EXISTS wallets (
 );
 
 ALTER TABLE wallets ADD COLUMN IF NOT EXISTS backup_confirmed BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE wallets ADD COLUMN IF NOT EXISTS raw_address TEXT;
+
+-- Fast lookup from an incoming TonAPI webhook (which gives us the raw
+-- account_id) back to which user it belongs to.
+CREATE INDEX IF NOT EXISTS idx_wallets_raw_address ON wallets (raw_address) WHERE raw_address IS NOT NULL;
 
 -- Generic small-value config store, replaces global Bot.getData("fee_percent") etc.
 CREATE TABLE IF NOT EXISTS bot_config (
