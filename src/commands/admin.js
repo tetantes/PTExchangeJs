@@ -38,6 +38,7 @@ async function admin(ctx) {
       [{ text: 'Set Fee %', callback_data: '/set_fee' }],
       [{ text: 'Set Fee Wallet', callback_data: '/set_fee_wallet' }],
       [{ text: 'Toggle Maintenance', callback_data: '/toggle_maintenance' }],
+      [{ text: '📢 Broadcast', callback_data: '/broadcast' }],
       [{ text: 'View Users', callback_data: '/users' }],
     ],
   };
