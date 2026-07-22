@@ -4,6 +4,8 @@ const store = require('../db/store');
 const cryptoLib = require('../lib/crypto');
 const { showMenu, editOrSend, deleteSafe } = require('../lib/ui');
 const { startBackupConfirm } = require('../lib/backupConfirm');
+const { syncTonSubscription } = require('../lib/tonapiSubscribe');
+const { friendlyToRaw } = require('../lib/tonAddress');
 
 async function generateWallet(ctx) {
   const text = `${em('5397916757333654639', '➕')} <b>Generate Wallet</b>\n\nSelect chain:`;
@@ -113,7 +115,11 @@ async function generateWalletExec(ctx) {
   const { address, address_eq: addressEq, mnemonic } = data;
   const encryptedMnemonic = cryptoLib.encrypt(mnemonic);
 
-  await store.saveWallet(u, 'ton', { address, addressEq, version, encryptedMnemonic, importType: 'generated' });
+  let rawAddress = null;
+  try { rawAddress = friendlyToRaw(address); } catch (e) { console.error('Address conversion failed:', e.message); }
+
+  const { previousRawAddress } = await store.saveWallet(u, 'ton', { address, addressEq, rawAddress, version, encryptedMnemonic, importType: 'generated' });
+  syncTonSubscription(rawAddress, previousRawAddress).catch((e) => console.error('TonAPI sync error:', e.message));
   await deleteSafe(ctx, chatId, loadingMsgId);
 
   const formatted = mnemonic.replace(/ /g, '\n');
