@@ -52,4 +52,11 @@ async function getTransaction(txHash) {
   return data;
 }
 
-module.exports = { createWebhook, listWebhooks, deleteWebhook, subscribeAccounts, unsubscribeAccounts, getTransaction };
+// Real on-chain balance straight from TonAPI - no Vercel call needed, and we
+// already have the raw account_id from the webhook payload itself.
+async function getAccountBalance(rawAddress) {
+  const { data } = await api.get(`/v2/accounts/${rawAddress}`);
+  return Number(data.balance) / 1e9; // nanotons -> TON
+}
+
+module.exports = { createWebhook, listWebhooks, deleteWebhook, subscribeAccounts, unsubscribeAccounts, getTransaction, getAccountBalance };
