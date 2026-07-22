@@ -3,7 +3,6 @@ const config = require('./config');
 const bot = require('./bot');
 const store = require('./db/store');
 const tonapi = require('./lib/tonapi');
-const gateway = require('./lib/gateway');
 const { notifyDeposit } = require('./lib/notify');
 
 // Same rationale as bot.catch() in bot.js, but for anything OUTSIDE Telegraf's
@@ -65,20 +64,24 @@ app.post(`/webhook/tonapi/${config.tonapiWebhookToken}`, async (req, res) => {
 
     const comment = inMsg.decoded_body?.text || inMsg.decoded_body?.comment || null;
 
-    const wallet = await store.getWallet(owner.user_id, 'ton');
-
     // Update our internal running total for other features (dashboard tx
-    // count, etc.) but for the notification, show the REAL balance from your
-    // gateway instead of our own calculated total - those can drift out of
-    // sync (fees, other deposits missed earlier, manual DB edits, etc.).
-    const [, balData] = await Promise.all([
+    // count, etc.) but for the notification, show the REAL balance - straight
+    // from TonAPI using the account_id we already have from the webhook
+    // payload itself, NOT a call to your Vercel gateway (that was the earlier
+    // version's bug: it added a Vercel dependency you specifically didn't
+    // want, and if that call was slow/failing, it could break the whole
+    // notification instead of just showing an approximate balance).
+    const [, realBalance] = await Promise.all([
       Promise.all([
         store.addBalance(owner.user_id, amountTon),
         store.incrementTxStats(owner.user_id, 0),
       ]),
-      wallet?.address ? gateway.tonBalance(wallet.address) : Promise.resolve(null),
+      tonapi.getAccountBalance(account_id).catch((e) => {
+        console.error('TonAPI balance lookup failed:', e.message);
+        return null;
+      }),
     ]);
-    const newBalance = balData?.ton_balance ?? amountTon;
+    const newBalance = realBalance ?? amountTon;
 
     await notifyDeposit(bot.telegram, owner.user_id, {
       amount: amountTon,

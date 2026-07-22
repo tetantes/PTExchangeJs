@@ -19,6 +19,7 @@ const pin = require('./commands/pin');
 const send = require('./commands/send');
 const receive = require('./commands/receive');
 const backupConfirm = require('./lib/backupConfirm');
+const broadcast = require('./commands/broadcast');
 
 const bot = new Telegraf(config.botToken);
 
@@ -43,6 +44,7 @@ bot.command('import_wallet', importWallet.importWallet);
 bot.command('test', test.test);
 bot.command('send', send.sendMenu);
 bot.command('receive', receive.receiveMenu);
+bot.command('broadcast', broadcast.broadcastStart);
 
 // ── Callback query actions (button taps) ──
 const actionMap = new Map(Object.entries({
@@ -95,6 +97,8 @@ const actionMap = new Map(Object.entries({
   '/receive': receive.receiveMenu,
   '/receive_ton': receive.receiveTon,
   '/receive_bnb': receive.receiveBnb,
+  '/broadcast_confirm': broadcast.broadcastConfirm,
+  '/broadcast': broadcast.broadcastStart,
 }));
 
 const usersPageRe = /^\/users_page( \d+)?$/;
@@ -109,6 +113,18 @@ bot.on('callback_query', (ctx, next) => {
   if (usersPageRe.test(data)) return admin.usersPage(ctx);
 
   return next();
+});
+
+// ── Broadcast capture ──
+// Needs to catch ANY message type (photo, video, poll, plain text...), not
+// just text, so this runs as its own general 'message' handler ahead of the
+// text-only next-command flow below.
+bot.on('message', async (ctx, next) => {
+  const u = ctx.from.id;
+  if (!admin.isAdmin(u)) return next();
+  const awaiting = await store.getSession(u, 'awaiting_broadcast');
+  if (!awaiting) return next();
+  return broadcast.captureBroadcastMessage(ctx);
 });
 
 // ── Plain-text "next command" flow (replaces Bot.handleNextCommand) ──
