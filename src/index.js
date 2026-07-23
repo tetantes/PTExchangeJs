@@ -32,15 +32,23 @@ app.use(bot.webhookCallback(webhookPath));
 // in the URL path IS the auth (same idea as the Telegram webhook path above -
 // only someone who knows this exact URL can hit it).
 app.post(`/webhook/tonapi/${config.tonapiWebhookToken}`, async (req, res) => {
+  // ALWAYS respond 200 immediately, no matter what's in the body - TonAPI
+  // suspends webhooks after failed deliveries, so a 400/500 here (even for a
+  // payload shape we don't recognize) risks getting suspended again. Any
+  // real problem gets logged instead of reflected back as an error status.
+  res.status(200).json({ ok: true });
+
+  // TEMP: log the exact raw payload TonAPI sends, so we can confirm the real
+  // field names instead of guessing from docs. Check Render logs after a
+  // test deposit and look for this line - remove once confirmed working.
+  console.log('TonAPI webhook raw payload:', JSON.stringify(req.body));
+
   try {
     const { account_id, tx_hash } = req.body || {};
     if (!account_id || !tx_hash) {
-      return res.status(400).json({ ok: false, error: 'account_id and tx_hash are required' });
+      console.warn('TonAPI webhook: missing account_id or tx_hash in payload, see raw payload logged above');
+      return;
     }
-
-    // Respond immediately - TonAPI doesn't need to wait on us looking up the
-    // user, fetching tx details, or sending a Telegram message.
-    res.status(200).json({ ok: true });
 
     // Dedup: TonAPI can retry a webhook delivery. tx_hash is unique per
     // transaction, so use it as an idempotency key with a short TTL.
@@ -92,7 +100,6 @@ app.post(`/webhook/tonapi/${config.tonapiWebhookToken}`, async (req, res) => {
     });
   } catch (err) {
     console.error('TonAPI webhook error:', err.message);
-    if (!res.headersSent) res.status(500).json({ ok: false, error: 'internal error' });
   }
 });
 
