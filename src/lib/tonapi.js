@@ -42,20 +42,50 @@ async function unsubscribeAccounts(webhookId, accountIds) {
   return data;
 }
 
+// Retries on 429 (rate limit) with a short backoff instead of dropping the
+// request entirely - a burst of webhook deliveries (e.g. a backlog replayed
+// after the webhook comes back from being suspended) can trigger several
+// GET calls to TonAPI within the same second, easily tripping their rate
+// limit. A dropped 429 used to mean that deposit's notification just never
+// happened - now it retries up to 3 times with increasing delay.
+async function withRetry(fn, attempts = 3) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const status = err.response?.status;
+      if (status === 429 && i < attempts - 1) {
+        const delay = 500 * (i + 1); // 500ms, 1000ms, ...
+        console.warn(`TonAPI 429, retrying in ${delay}ms (attempt ${i + 1}/${attempts})`);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 // Called the moment a webhook fires (which only gives us account_id + tx_hash,
 // no amount) - this fetches the actual transaction so we know what happened.
-// NOTE: field paths below are based on TonAPI's documented v2 transaction
-// schema; worth double-checking against a real payload once live, since I
-// can't call this endpoint from here without your API key.
 async function getTransaction(txHash) {
-  const { data } = await api.get(`/v2/blockchain/transactions/${txHash}`);
+  const data = await withRetry(async () => {
+    const { data } = await api.get(`/v2/blockchain/transactions/${txHash}`);
+    return data;
+  });
+  // TEMP: log the raw response so we can confirm the real field names for
+  // amount/sender/comment instead of guessing from docs. Remove once the
+  // parsing in index.js is confirmed correct against a live deposit.
+  console.log('TonAPI getTransaction raw response:', JSON.stringify(data));
   return data;
 }
 
 // Real on-chain balance straight from TonAPI - no Vercel call needed, and we
 // already have the raw account_id from the webhook payload itself.
 async function getAccountBalance(rawAddress) {
-  const { data } = await api.get(`/v2/accounts/${rawAddress}`);
+  const data = await withRetry(async () => {
+    const { data } = await api.get(`/v2/accounts/${rawAddress}`);
+    return data;
+  });
   return Number(data.balance) / 1e9; // nanotons -> TON
 }
 
