@@ -42,21 +42,22 @@ async function unsubscribeAccounts(webhookId, accountIds) {
   return data;
 }
 
-// Retries on 429 (rate limit) with a short backoff instead of dropping the
-// request entirely - a burst of webhook deliveries (e.g. a backlog replayed
-// after the webhook comes back from being suspended) can trigger several
-// GET calls to TonAPI within the same second, easily tripping their rate
-// limit. A dropped 429 used to mean that deposit's notification just never
-// happened - now it retries up to 3 times with increasing delay.
-async function withRetry(fn, attempts = 3) {
+// Retries transient failures instead of dropping the request entirely:
+//   429 - rate limited (a burst of webhook deliveries hitting TonAPI at once)
+//   404 - the transaction the webhook just told us about isn't indexed in
+//         their REST API yet. The webhook fires the instant TonAPI's node
+//         SEES the tx; their REST/indexing layer can lag a second or two
+//         behind that. This is what caused deposits to sometimes arrive
+//         late or not at all - retrying with a short wait covers that gap.
+async function withRetry(fn, { attempts = 3, retryStatuses = [429], baseDelay = 500 } = {}) {
   for (let i = 0; i < attempts; i++) {
     try {
       return await fn();
     } catch (err) {
       const status = err.response?.status;
-      if (status === 429 && i < attempts - 1) {
-        const delay = 500 * (i + 1); // 500ms, 1000ms, ...
-        console.warn(`TonAPI 429, retrying in ${delay}ms (attempt ${i + 1}/${attempts})`);
+      if (retryStatuses.includes(status) && i < attempts - 1) {
+        const delay = baseDelay * (i + 1);
+        console.warn(`TonAPI ${status}, retrying in ${delay}ms (attempt ${i + 1}/${attempts})`);
         await new Promise((r) => setTimeout(r, delay));
         continue;
       }
@@ -67,20 +68,23 @@ async function withRetry(fn, attempts = 3) {
 
 // Called the moment a webhook fires (which only gives us account_id + tx_hash,
 // no amount) - this fetches the actual transaction so we know what happened.
+// Generous retry profile: up to 5 attempts, ~1s/2s/3s/4s backoff (~10s total
+// patience) to ride out indexing lag, since a slightly-late notification is
+// far better than a silently dropped one.
 async function getTransaction(txHash) {
-  const data = await withRetry(async () => {
-    const { data } = await api.get(`/v2/blockchain/transactions/${txHash}`);
-    return data;
-  });
-  // TEMP: log the raw response so we can confirm the real field names for
-  // amount/sender/comment instead of guessing from docs. Remove once the
-  // parsing in index.js is confirmed correct against a live deposit.
-  console.log('TonAPI getTransaction raw response:', JSON.stringify(data));
-  return data;
+  return withRetry(
+    async () => {
+      const { data } = await api.get(`/v2/blockchain/transactions/${txHash}`);
+      return data;
+    },
+    { attempts: 5, retryStatuses: [429, 404], baseDelay: 1000 }
+  );
 }
 
 // Real on-chain balance straight from TonAPI - no Vercel call needed, and we
-// already have the raw account_id from the webhook payload itself.
+// already have the raw account_id from the webhook payload itself. An
+// account always exists once it's had any activity, so no 404 retry needed
+// here - just the rate-limit case.
 async function getAccountBalance(rawAddress) {
   const data = await withRetry(async () => {
     const { data } = await api.get(`/v2/accounts/${rawAddress}`);
